@@ -88,8 +88,11 @@ with OUT_CSV.open("w", newline="", encoding="utf-8") as f:
     w.writeheader()
     w.writerows(rows)
 
-OUT_JSON.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+OUT_JSONL = pathlib.Path("elver_per_name.jsonl")
+with OUT_JSONL.open("w", encoding="utf-8") as jf:
+    for r in rows:
+        jf.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 print(f"CSV : {OUT_CSV}  ({OUT_CSV.stat().st_size/1e6:.1f} MB)")
-print(f"JSON: {OUT_JSON} ({OUT_JSON.stat().st_size/1e6:.1f} MB)")
+print(f"JSONL: {OUT_JSONL} ({OUT_JSONL.stat().st_size/1e6:.1f} MB)")
 print("✅  Ferdig – én rad per unik elv med UL/LR-bbox og lat-før-lon-rekkefølge.")
