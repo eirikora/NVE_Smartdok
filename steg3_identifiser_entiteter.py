@@ -18,6 +18,8 @@ NVE_DATA = {
     # ... (legg til andre typer hvis de skal brukes aktivt)
 }
 
+DEFAULT_NVE_DATA_DIR = pathlib.Path(__file__).parent.resolve() / "nve_data"
+
 KOMMUNE_COORDS = {} # { "kommunenavn_lower": {"lat": float, "lon": float, "count": int} }
 
 # --- Hjelpefunksjoner ---
@@ -650,8 +652,8 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=pathlib.Path,
-        default=pathlib.Path("."), 
-        help="Mappe som inneholder NVEs jsonl-datafiler (f.eks. elver_per_name.jsonl)."
+        default=DEFAULT_NVE_DATA_DIR, # Bruk den definerte standardverdien
+        help=f"Mappe som inneholder NVEs jsonl-datafiler (f.eks. elver_per_name.jsonl). Standard: {DEFAULT_NVE_DATA_DIR}"
     )
 
     args = parser.parse_args()
