@@ -1,7 +1,13 @@
 node_modules
 out
 design.pptx
+.env
 *.jsonl
 *.json
 *.csv
 resume_oid.txt
+*.pdf
+*.md 
+*.sd
+*.nsd 
+*.html
