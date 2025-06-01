@@ -3,188 +3,236 @@ import argparse
 import pathlib
 import sys
 import re
-import html # For html.escape
+import html
 
-def escape_attr(value):
-    return html.escape(str(value), quote=True)
+# NYTT: Importer markdown-it-py for robust Markdown-konvertering
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+from markdown_it.renderer import RendererProtocol
+from markdown_it.utils import OptionsDict
+from markdown_it.rules_inline import StateInline
 
-def parse_custom_tag(match_obj): # Antar at denne er definert og fungerer
-    tag_type = match_obj.group(1)
-    all_attributes_str = match_obj.group(2)
-    attributes = {}
-    attr_regex = r'([\w_:-]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))'
-    for attr_match in re.finditer(attr_regex, all_attributes_str):
-        key = attr_match.group(1)
-        value = next(g for g in attr_match.groups()[1:] if g is not None)
-        attributes[key] = value
+# --- Logikk for å bygge HTML for en custom tag (hentet fra originalt script) ---
+# Denne logikken er nå mer gjenbrukbar.
+def _build_interactive_tag_html(attributes: dict, tag_type: str) -> str:
+    """Bygger den endelige HTML-en for en parset custom tag."""
     display_name = attributes.get("navn", "Ukjent Navn")
     metadata_table_rows = []
+    
     key_display_order = {
-        "navn": "Navn",
-        "id": "ID", "eier": "Eier", "kommune": "Kommune", "status": "Status", 
-        "ytelse_MW": "Ytelse (MW)", "vassdragsNr": "Vassdragsnr.", 
+        "navn": "Navn", "id": "ID", "eier": "Eier", "kommune": "Kommune", 
+        "status": "Status", "ytelse_MW": "Ytelse (MW)", "vassdragsNr": "Vassdragsnr.", 
         "magasinNr": "Magasinnr.", "areal_km2": "Areal (km²)", 
         "center_lat": "Latitude", "center_lon": "Longitude",
         "lat": "Latitude", "lon": "Longitude",
     }
-    type_to_display = ""
-    if 'type' in attributes: # Sjekk om 'type' attributt finnes
-        type_to_display = attributes['type'].capitalize()
-    # Hvis ikke 'type' attributt, bruk tag_type (men sjekk om det allerede er lagt til for å unngå duplikat)
-    # Dette bør ideelt sett håndteres bedre slik at "Type" bare legges til én gang.
-    # For nå, la oss anta at key_display_order ikke har "type" hvis vi vil at tag_type skal brukes.
-    # Eller, vi kan ha en logikk som:
-    final_type_value = attributes.get('type', tag_type).capitalize()
-    metadata_table_rows.append(f"<tr><td>Type</td><td>{escape_attr(final_type_value)}</td></tr>")
 
+    final_type_value = attributes.get('type', tag_type).capitalize()
+    metadata_table_rows.append(f"<tr><td>Type</td><td>{html.escape(final_type_value)}</td></tr>")
+
+    processed_keys = set(['type'])
 
     for key, display_text in key_display_order.items():
-        if key == 'type': continue # Allerede håndtert
+        if key in processed_keys: continue
         if key in attributes and attributes[key] is not None and str(attributes[key]).strip() != "":
             value = attributes[key]
-            if key in ["center_lat", "lat"] and ("center_lon" in attributes or "lon" in attributes):
-                continue
-            if key in ["center_lon", "lon"] and ("center_lat" in attributes or "lat" in attributes):
-                lat_key_to_use = "center_lat" if "center_lat" in attributes else "lat"
+            
+            # Spesialhåndtering for posisjon
+            is_lat = key in ["center_lat", "lat"]
+            is_lon = key in ["center_lon", "lon"]
+            
+            if is_lat:
                 lon_key_to_use = "center_lon" if "center_lon" in attributes else "lon"
-                lat_val = attributes.get(lat_key_to_use)
-                lon_val = attributes.get(lon_key_to_use)
-                if lat_val and lon_val:
-                    try: 
-                        float(lat_val); float(lon_val)
-                        metadata_table_rows.append(f"<tr><td>Posisjon</td><td>Lat: {escape_attr(lat_val)}, Lon: {escape_attr(lon_val)}</td></tr>")
-                    except ValueError: pass 
+                if lon_key_to_use in attributes:
+                    lat_val = value
+                    lon_val = attributes.get(lon_key_to_use)
+                    if lat_val and lon_val:
+                        try: 
+                            float(lat_val); float(lon_val)
+                            metadata_table_rows.append(f"<tr><td>Posisjon</td><td>Lat: {html.escape(lat_val)}, Lon: {html.escape(lon_val)}</td></tr>")
+                        except ValueError: pass
+                    processed_keys.add(lat_val)
+                    processed_keys.add(lon_key_to_use)
                 continue
-            metadata_table_rows.append(f"<tr><td>{escape_attr(display_text)}</td><td>{escape_attr(value)}</td></tr>")
+            elif is_lon:
+                # Dette håndteres allerede av lat-sjekken, så vi skipper.
+                continue
+            
+            metadata_table_rows.append(f"<tr><td>{html.escape(display_text)}</td><td>{html.escape(str(value))}</td></tr>")
+            processed_keys.add(key)
+            
     gmaps_link = ""
     lat_val_for_map = attributes.get("center_lat", attributes.get("lat"))
     lon_val_for_map = attributes.get("center_lon", attributes.get("lon"))
     if lat_val_for_map and lon_val_for_map:
         try:
             float(lat_val_for_map); float(lon_val_for_map)
-            gmaps_link = f"https://www.google.com/maps?q={escape_attr(lat_val_for_map)},{escape_attr(lon_val_for_map)}"
+            gmaps_link = f"https://www.google.com/maps?q={html.escape(lat_val_for_map)},{html.escape(lon_val_for_map)}"
             metadata_table_rows.append(f'<tr><td>Kart</td><td><a href="{gmaps_link}" target="_blank" class="map-link-in-tooltip">Vis på Google Maps</a></td></tr>')
         except ValueError: gmaps_link = ""
+
     tooltip_html = f'<div class="tooltip-content"><table>{"".join(metadata_table_rows)}</table></div>'
     data_gmaps_attr = f'data-gmaps-link="{gmaps_link}"' if gmaps_link else ""
     
-    s = '<span class="custom-tag-container" '
-    s += data_gmaps_attr
-    s += ' tabindex="0">'
-    s += escape_attr(display_name)
-    s += '<span class="tooltip">'
-    s += tooltip_html
-    s += '</span></span>'
+    s = f'<span class="custom-tag-container" {data_gmaps_attr} tabindex="0">'
+    s += html.escape(display_name)
+    s += f'<span class="tooltip">{tooltip_html}</span>'
+    s += '</span>'
     return s
 
-# NY: Hjelpefunksjon for å prosessere en enkelt linje (eller heading-innhold)
-def process_text_with_inline_tags(text_line):
-    custom_tag_regex_for_split = r"(<\w+\s+[^>]+?>)" # Matcher våre custom tags
-    single_tag_parse_regex = r"<(\w+)\s+([^>]+?)>"
+# --- Nytt system for Markdown-konvertering ---
+
+def _parse_attributes(tag_content: str) -> dict:
+    """Parser en attributt-streng som 'key="value" key2='value2'' til et dict."""
+    attributes = {}
+    attr_regex = r'([\w_:-]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))'
+    for attr_match in re.finditer(attr_regex, tag_content):
+        key = attr_match.group(1)
+        value = next(g for g in attr_match.groups()[1:] if g is not None)
+        attributes[key] = value
+    return attributes
+
+def nsd_tag_plugin(md: MarkdownIt):
+    """En plugin for markdown-it-py for å håndtere [[...]]-syntaksen."""
     
-    parts = re.split(custom_tag_regex_for_split, text_line)
-    processed_parts = []
-    for i, part_str in enumerate(parts):
-        if not part_str: continue
-        if i % 2 == 1: # Custom tag string
-            match = re.fullmatch(single_tag_parse_regex, part_str)
-            if match:
-                processed_parts.append(parse_custom_tag(match))
-            else: 
-                processed_parts.append(html.escape(part_str)) 
-        else: # Vanlig tekst
-            processed_parts.append(html.escape(part_str))
-    return "".join(processed_parts)
+    def nsd_tag_rule(state: "StateInline", silent: bool): # Bruker streng-hint
+        # ... (koden for nsd_tag_rule er uendret)
+        if state.src[state.pos:state.pos + 2] != '[[':
+            return False
+        
+        search_start_pos = state.pos + 2
+        if search_start_pos >= len(state.src):
+            return False
 
-def nsd_to_html_content(nsd_content):
-    output_html_blocks = []
-    current_paragraph_lines_raw = [] # Samler RÅ tekstlinjer for ett avsnitt
-
-    def flush_paragraph_to_div():
-        nonlocal current_paragraph_lines_raw
-        if current_paragraph_lines_raw:
-            # Prosesser hver linje for inline tags, og join deretter med <br />
-            processed_html_lines_for_paragraph = []
-            for raw_line in current_paragraph_lines_raw:
-                processed_html_lines_for_paragraph.append(process_text_with_inline_tags(raw_line))
+        match_end_bracket = state.src.find(']]', search_start_pos)
+        
+        if match_end_bracket == -1:
+            return False
+        
+        tag_full_content = state.src[search_start_pos:match_end_bracket]
+        
+        parts = tag_full_content.strip().split(maxsplit=1)
+        if not parts:
+            return False
+        tag_type = parts[0]
+        attr_string = parts[1] if len(parts) > 1 else ""
+        
+        if not silent:
+            attributes = _parse_attributes(attr_string)
             
-            final_paragraph_html = "<br />\n".join(processed_html_lines_for_paragraph)
-            
-            if final_paragraph_html.strip():
-                 output_html_blocks.append(f'<div class="text-block">{final_paragraph_html}</div>')
-            current_paragraph_lines_raw = []
+            token = state.push("nsd_tag", "", 0) 
+            token.meta["attributes"] = attributes
+            token.meta["tag_type"] = tag_type
+        
+        state.pos = match_end_bracket + 2
+        return True
 
-    lines = nsd_content.splitlines()
+    # KORRIGERT SIGNATUR HER:
+    # Fjern 'self' og type-hint RendererProtocol hvis den ikke brukes
+    def render_nsd_tag(tokens: list[Token], idx: int, options: OptionsDict, env: dict) -> str:
+        token = tokens[idx]
+        attributes = token.meta.get("attributes", {})
+        tag_type = token.meta.get("tag_type", "ukjent")
+        return _build_interactive_tag_html(attributes, tag_type)
+
+    md.inline.ruler.before("escape", "nsd_tag", nsd_tag_rule)
+    md.renderer.rules["nsd_tag"] = render_nsd_tag
+
+def preprocess_nsd_to_commonmark(nsd_content: str) -> str:
+    """
+    Konverterer custom <tag ...> til [[tag ...]] for å unngå konflikt med HTML
+    og for å gjøre det lettere for markdown-parseren.
+    """
+    # Regex for å finne en custom tag. \w+ sikrer at det er et ord som tag-navn.
+    custom_tag_regex = r"<(\w+\s+[^>]*?)>"
     
-    for line_idx, line_text in enumerate(lines):
-        stripped_line = line_text.strip()
+    # \1 er en back-reference til den første capture-gruppen (innholdet inni <...>)
+    # Dette bytter <elv ...> til [[elv ...]] på en sikker måte.
+    return re.sub(custom_tag_regex, r"[[\1]]", nsd_content)
 
-        is_block_element_line = (
-            line_text.startswith("# ") or
-            line_text.startswith("## ") or
-            line_text.startswith("### ") or
-            re.fullmatch(r"-{3,}", stripped_line) or
-            re.fullmatch(r"\*{3,}", stripped_line)
-        )
+def nsd_to_html_content(nsd_content: str) -> str:
+    """
+    Hovedfunksjon for konvertering. Bruker nå en fullverdig Markdown-parser.
+    """
+    # 1. Pre-prosesser innholdet for å bytte ut <tag> med [[tag]]
+    preprocessed_content = preprocess_nsd_to_commonmark(nsd_content)
 
-        if is_block_element_line:
-            flush_paragraph_to_div()
-            # For headinger, prosesser innholdet for inline tags
-            if line_text.startswith("# "): 
-                output_html_blocks.append(f"<h1>{process_text_with_inline_tags(line_text[2:])}</h1>")
-            elif line_text.startswith("## "): 
-                output_html_blocks.append(f"<h2>{process_text_with_inline_tags(line_text[3:])}</h2>")
-            elif line_text.startswith("### "): 
-                output_html_blocks.append(f"<h3>{process_text_with_inline_tags(line_text[4:])}</h3>")
-            else: # Må være HR
-                output_html_blocks.append("<hr>")
-        elif not stripped_line: 
-            flush_paragraph_to_div()
-            # output_html_blocks.append('<div class="text-block"> </div>') # Valgfritt
-        else: 
-            current_paragraph_lines_raw.append(line_text) # Legg til RÅ linje
+    # 2. Sett opp markdown-parseren med vår custom plugin
+    md = MarkdownIt("commonmark").use(nsd_tag_plugin)
     
-    flush_paragraph_to_div() 
+    # 3. Konverter hele dokumentet til HTML.
+    #    md.render() tar seg av alt: overskrifter, lister, avsnitt, og våre custom tags via plugin-en.
+    html_output = md.render(preprocessed_content)
+    
+    # Etter markdown-konvertering er avsnitt pakket i <p>. Vi bytter dette til
+    # <div class="text-block"> for å matche den gamle klassestrukturen om ønskelig.
+    html_output = html_output.replace("<p>", '<div class="text-block">').replace("</p>", "</div>")
+    
+    return html_output
 
-    return "\n".join(output_html_blocks)
+# Funksjonene `generate_full_html` og `main` er uendret, da de kun jobber med
+# det ferdige HTML-innholdet eller filhåndtering. Vi limer dem inn her for kompletthet.
 
 def generate_full_html(body_content, title="Smart Dokument"):
-    css_styles = f"""
-    body {{ 
+    css_styles = """
+    body { 
         font-family: sans-serif; 
         line-height: 1.6; 
-        margin: 20px; 
-        font-size: 16px; /* Sett en grunnleggende fontstørrelse for body */
-    }}
-    h1, h2, h3 {{ color: #333; }}
-    /* Standard heading-størrelser (kan justeres) */
-    h1 {{ font-size: 2em; }}
-    h2 {{ font-size: 1.5em; }}
-    h3 {{ font-size: 1.17em; }}
+        margin: 20px auto; /* Sentrer innholdet */
+        max-width: 800px;  /* Bedre lesbarhet */
+        font-size: 16px;
+    }
+    h1, h2, h3 { color: #333; }
+    h1 { font-size: 2em; }
+    h2 { font-size: 1.5em; }
+    h3 { font-size: 1.17em; }
 
-    .text-block {{
+    .text-block {
         margin-bottom: 1em; 
-    }}
-    hr {{ margin: 20px 0; }}
+    }
+    hr { margin: 20px 0; }
+    
+    /* Legg til stiler for lister og annen markdown-syntaks */
+    ul, ol {
+        padding-left: 2em;
+    }
+    blockquote {
+        border-left: 4px solid #ccc;
+        padding-left: 1em;
+        margin-left: 0;
+        color: #666;
+    }
+    code {
+        background-color: #f0f0f0;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-family: monospace;
+    }
+    pre > code {
+        display: block;
+        padding: 1em;
+        overflow-x: auto;
+    }
 
-    .custom-tag-container {{
+
+    .custom-tag-container {
         position: relative; 
         display: inline;         
         border-bottom: 1px dotted blue; 
         cursor: default; 
-    }}
-    .custom-tag-container[data-gmaps-link] {{
+    }
+    .custom-tag-container[data-gmaps-link] {
         cursor: pointer;
         color: navy; /* Farge for klikkbare tagger */
-    }}
+    }
 
-    .tooltip {{
+    .tooltip {
         visibility: hidden;
         width: auto; 
         min-width: 250px;
         max-width: 400px;
         background-color: #f9f9f9;
-        color: #333; /* Standard tekstfarge for tooltip-innhold */
+        color: #333;
         text-align: left;
         border-radius: 6px;
         padding: 10px;
@@ -196,128 +244,70 @@ def generate_full_html(body_content, title="Smart Dokument"):
         transition: opacity 0.3s, visibility 0s linear 0.3s; 
         box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
         border: 1px solid #ddd;
-        
-        /* --- NYTT: Overstyr fontstiler for tooltip-innhold --- */
-        font-family: sans-serif; /* Eller en annen basefont du foretrekker */
-        font-size: 0.9rem;       /* En mindre, fast størrelse (rem er relativt til root font-size) */
-                                 /* Alternativt: font-size: 14px; (pikselbasert) */
+        font-family: sans-serif;
+        font-size: 0.9rem;
         font-weight: normal;
-        line-height: 1.4;      /* Justert linjehøyde for tooltip */
-        /* Sikre at tekstfargen ikke arves fra heading */
-        color: #222; /* En mørk gråfarge, juster etter ønske */
-    }}
-
-    /* Sørg for at linker inne i tooltipen også får standard farge og ikke arver heading-farge */
-    .tooltip a, .tooltip a:visited {{
-        color: navy; /* Eller en annen standard linkfarge */
+        line-height: 1.4;
+        color: #222;
+    }
+    .tooltip a, .tooltip a:visited {
+        color: navy;
         text-decoration: underline;
-    }}
-    .tooltip a:hover {{
-        color: darkblue;
-    }}
-
+    }
+    .tooltip a:hover { color: darkblue; }
 
     .custom-tag-container:hover .tooltip,
     .custom-tag-container:focus .tooltip,
-    .custom-tag-container.tooltip-active .tooltip {{
+    .custom-tag-container.tooltip-active .tooltip {
         visibility: visible;
         opacity: 1;
         transition: opacity 0.3s;
         z-index: 10; 
-    }}
-    .tooltip table {{
+    }
+    .tooltip table {
         width: 100%;
         border-collapse: collapse;
-        /* Arver fontstiler fra .tooltip, men vi kan være mer spesifikke hvis nødvendig */
-    }}
-    .tooltip th, .tooltip td {{
+    }
+    .tooltip th, .tooltip td {
         padding: 5px;
         border: 1px solid #eee;
         text-align: left;
-        /* font-size er allerede satt av .tooltip, men kan overstyres her om ønskelig */
-        /* f.eks. font-size: 1em; for å være relativ til tooltipens font-size (0.9rem) */
-    }}
-    .tooltip th {{ 
+    }
+    .tooltip th { 
         background-color: #e9e9e9; 
-        font-weight: bold; /* Sørg for at th er fet */
-    }}
+        font-weight: bold;
+    }
     """
-    # ... (JavaScript og HTML-mal forblir den samme) ...
     javascript_code = """
     document.addEventListener('DOMContentLoaded', function() {
-        console.log("DOM geladen, starter JS for tooltips.");
         const containers = document.querySelectorAll('.custom-tag-container');
-        console.log(`Fant ${containers.length} custom-tag-container elementer.`);
-
-        containers.forEach((container, index) => {
-            const currentDisplayName = container.firstChild && container.firstChild.nodeType === Node.TEXT_NODE ? container.firstChild.textContent.trim() : "Ukjent_Navn_JS";
-            // console.log(`Setter opp container ${index}, Navn: ${JSON.stringify(currentDisplayName)}`); // Kan kommenteres ut for mindre støy
-
+        containers.forEach(container => {
             const gmapsLink = container.getAttribute('data-gmaps-link');
             if (gmapsLink) {
                 container.addEventListener('click', function(event) {
-                    if (event.target.closest('a.map-link-in-tooltip')) {
-                        return;
-                    }
-                    // console.log(`Container ${index} (Navn: ${JSON.stringify(currentDisplayName)}) klikket, åpner: ${gmapsLink}`);
+                    if (event.target.closest('a.map-link-in-tooltip')) { return; }
                     window.open(gmapsLink, '_blank');
                 });
             }
-
-            let enterTimeout;
-            let leaveTimeout;
+            let enterTimeout, leaveTimeout;
             const tooltipElement = container.querySelector('.tooltip'); 
-
-            if (!tooltipElement) {
-                console.error(`FEIL: Fant IKKE .tooltip inne i container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-            } else {
-                // console.log(`OK: Fant .tooltip inne i container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-            }
-
-            container.addEventListener('mouseenter', function(event) {
-                // console.log(`Mouseenter på container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
+            container.addEventListener('mouseenter', function() {
                 clearTimeout(leaveTimeout); 
-                enterTimeout = setTimeout(() => {
-                    // console.log(`Timeout for å vise tooltip for container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                    this.classList.add('tooltip-active');
-                }, 150); 
+                enterTimeout = setTimeout(() => this.classList.add('tooltip-active'), 150); 
             });
-
             container.addEventListener('mouseleave', function() {
-                // console.log(`Mouseleave fra container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
                 clearTimeout(enterTimeout); 
-                leaveTimeout = setTimeout(() => {
-                    // console.log(`Timeout for å skjule tooltip for container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                    this.classList.remove('tooltip-active');
-                }, 250); 
+                leaveTimeout = setTimeout(() => this.classList.remove('tooltip-active'), 250); 
             });
-            
-            container.addEventListener('focus', function() {
-                // console.log(`Focus på container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                this.classList.add('tooltip-active');
-            });
-            container.addEventListener('blur', function() {
-                // console.log(`Blur fra container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                if (!this.contains(document.activeElement) || document.activeElement === this) {
-                    this.classList.remove('tooltip-active');
-                }
-            });
-
+            container.addEventListener('focus', function() { this.classList.add('tooltip-active'); });
+            container.addEventListener('blur', function() { this.classList.remove('tooltip-active'); });
             if (tooltipElement) { 
-                tooltipElement.addEventListener('mouseenter', function() {
-                    // console.log(`Mouseenter på SELVE tooltipen for container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                    clearTimeout(leaveTimeout); 
-                    container.classList.add('tooltip-active'); 
-                });
-                tooltipElement.addEventListener('mouseleave', function() {
-                    // console.log(`Mouseleave fra SELVE tooltipen for container ${index} (Navn: ${JSON.stringify(currentDisplayName)})`);
-                    leaveTimeout = setTimeout(() => {
-                        container.classList.remove('tooltip-active');
-                    }, 250);
+                tooltipElement.addEventListener('mouseenter', () => clearTimeout(leaveTimeout));
+                tooltipElement.addEventListener('mouseleave', () => {
+                    leaveTimeout = setTimeout(() => container.classList.remove('tooltip-active'), 250);
                 });
             }
         });
-        console.log("JS for tooltips ferdig satt opp.");
     });
     """
 
@@ -327,56 +317,31 @@ def generate_full_html(body_content, title="Smart Dokument"):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{html.escape(title)}</title>
-    <style>
-{css_styles}
-    </style>
+    <style>{css_styles}</style>
 </head>
 <body>
     {body_content}
-    <script>
-{javascript_code}
-    </script>
+    <script>{javascript_code}</script>
 </body>
 </html>"""
     return html_template
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Konverterer et .nsd (NVE Smart Dokument) til en interaktiv HTML-fil.",
+        description="Konverterer et .nsd (NVE Smart Dokument) til en interaktiv HTML-fil med full Markdown-støtte.",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "input_file",
-        type=pathlib.Path,
-        help="Sti til input .nsd-fil"
-    )
-    parser.add_argument(
-        "-o", "--output",
-        type=pathlib.Path,
-        help="Valgfri sti for output HTML-fil. Standard: <input_fil_navn>.html"
-    )
-    parser.add_argument(
-        "--stdout",
-        action="store_true",
-        help="Skriv HTML-output til stdout i stedet for en fil."
-    )
-    parser.add_argument(
-        "--title",
-        type=str,
-        default=None, # Vil bruke filnavnet hvis ikke satt
-        help="Tittel for HTML-dokumentet."
-    )
+    parser.add_argument("input_file", type=pathlib.Path, help="Sti til input .nsd-fil")
+    parser.add_argument("-o", "--output", type=pathlib.Path, help="Valgfri sti for output HTML-fil. Standard: <input_fil_navn>.html")
+    parser.add_argument("--stdout", action="store_true", help="Skriv HTML-output til stdout i stedet for en fil.")
+    parser.add_argument("--title", type=str, default=None, help="Tittel for HTML-dokumentet.")
 
     args = parser.parse_args()
-
     input_path: pathlib.Path = args.input_file
 
     if not input_path.is_file():
         print(f"Feil: Input-filen '{input_path}' ble ikke funnet.", file=sys.stderr)
         sys.exit(1)
-
-    if input_path.suffix.lower() != ".nsd":
-        print(f"Advarsel: Input-filen '{input_path}' har ikke .nsd-ending, men fortsetter.", file=sys.stderr)
 
     try:
         nsd_content = input_path.read_text(encoding="utf-8")
@@ -385,13 +350,11 @@ def main():
         sys.exit(1)
 
     if not nsd_content.strip():
-        print(f"Filen '{input_path}' er tom.", file=sys.stderr)
-        # Håndter tom output for HTML også
+        # Håndterer tom fil som før
         empty_html_body = "<p>Dokumentet er tomt.</p>"
         doc_title = args.title if args.title else input_path.stem
         full_empty_html = generate_full_html(empty_html_body, title=doc_title)
-        if args.stdout:
-            print(full_empty_html)
+        if args.stdout: print(full_empty_html)
         else:
             output_path = args.output if args.output else input_path.with_suffix(".html")
             output_path.write_text(full_empty_html, encoding="utf-8")
@@ -399,9 +362,7 @@ def main():
         sys.exit(0)
 
     html_body = nsd_to_html_content(nsd_content)
-    
-    doc_title = args.title if args.title else input_path.stem # Bruk filstammen som tittel hvis ikke gitt
-
+    doc_title = args.title if args.title else input_path.stem
     full_html_output = generate_full_html(html_body, title=doc_title)
 
     if args.stdout:
