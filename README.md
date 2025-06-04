@@ -94,6 +94,15 @@ Dette vil generere:
 * En `.nsd`-fil (NVE Smart Dokument, tekstdokument i markdown format med <> tags for alle identifiserte entiteter og deres metadata)
 * En `.html`-fil for interaktiv visning i nettleser av samme Smart-dokument
 
+
+Alternativt kan du kjøre hvert steg i pipeline manuelt:
+```bash
+python steg1_pdf_til_md.py konsesjonsdok.pdf            # skaper markdown-fil med .md extension
+python steg2_md_tagging.py konsesjonsdok.md             # skaper tagget markdown-fil med .sd extension
+python steg3_identifiser_entiteter.py konsesjonsdok.sd  # skaper metadata utøkt smart dokument-fil med .nsd extension
+python steg4_nsd_til_html.py konsesjonsdok.nsd          # skaper interaktiv webside med .html extension for bedre lesbarhet
+```
+
 ---
 
 ## Filstruktur
