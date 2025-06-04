@@ -66,7 +66,7 @@ GOOGLE_API_KEY=<din_Google_API_nøkkel_hentet på aistudio.google.com>
 
 ### 1. Last ned NVE-data
 
-Gå inn i `nve_data/`-mappen og kjør alle skriptene for å hente ned og lagre metadata om elver, innsjøer og anlegg:
+Gå inn i `nve_data/`-mappen og kjør alle skriptene for å hente ned og lagre alle metadata om elver, innsjøer og anlegg i både .csv og .jsonl format:
 
 ```bash
 cd nve_data
