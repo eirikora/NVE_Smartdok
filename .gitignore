@@ -12,3 +12,5 @@ resume_oid.txt
 *.sd
 *.nsd 
 *.html
+test
+test/*

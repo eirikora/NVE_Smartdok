@@ -15,6 +15,8 @@ NVE_DATA = {
     "vannkraftverk": [],
     "solkraftverk": [],
     "vindkraftverk": [],
+    "dammer": [],
+    "magasiner": [],
     # ... (legg til andre typer hvis de skal brukes aktivt)
 }
 
@@ -478,11 +480,33 @@ def enrich_tag_match(match_obj, doc_kommune_coords, doc_eier_lower=None):
 
 
     elif entity_type_for_logic == "dam":
-        best_item = find_best_match(entity_name_from_tag, entity_type_for_logic, NVE_DATA["innsjoer"], "navn", "vatnLnr", "center_lat", "center_lon", doc_kommune_coords)
-        if best_item:
-            new_attrs_from_lookup["type"] = "innsjødam"
-            new_attrs_from_lookup["id"] = best_item.get("vatnLnr")
-            # ... (andre dam-attributter) ...
+        # Try dedicated dam dataset first
+        best_item = find_best_match(entity_name_from_tag, entity_type_for_logic, NVE_DATA["dammer"], "damNavn", "damNr", "lat", "lon", doc_kommune_coords)
+
+        # If not found in dams, try magasin dataset
+        if not best_item:
+            best_item = find_best_match(entity_name_from_tag, entity_type_for_logic, NVE_DATA["magasiner"], "magasinNavn", "magasinNr", "center_lat", "center_lon", doc_kommune_coords)
+            if best_item:
+                new_attrs_from_lookup["type"] = "magasin"
+                new_attrs_from_lookup["id"] = best_item.get("magasinNr")
+                new_attrs_from_lookup["lat"] = best_item.get("center_lat")
+                new_attrs_from_lookup["lon"] = best_item.get("center_lon")
+                new_attrs_from_lookup["volumOppdemt_Mm3"] = best_item.get("volumOppdemt_Mm3")
+                new_attrs_from_lookup["vannkraftverkNavn"] = best_item.get("vannkraftverkNavn")
+                new_attrs_from_lookup["kommune"] = best_item.get("kommuneNavn")
+                new_attrs_from_lookup["status"] = best_item.get("status")
+        else:
+            # Found in dam dataset
+            new_attrs_from_lookup["type"] = "dam"
+            new_attrs_from_lookup["id"] = best_item.get("damNr")
+            new_attrs_from_lookup["lat"] = best_item.get("lat")
+            new_attrs_from_lookup["lon"] = best_item.get("lon")
+            new_attrs_from_lookup["damKategori"] = best_item.get("damKategori")
+            new_attrs_from_lookup["damFunksjon"] = best_item.get("damFunksjon")
+            new_attrs_from_lookup["magasinVolum_Mm3"] = best_item.get("magasinVolum_Mm3")
+            new_attrs_from_lookup["vannkraftverkNavn"] = best_item.get("vannkraftverkNavn")
+            new_attrs_from_lookup["kommune"] = best_item.get("kommuneNavn")
+            new_attrs_from_lookup["status"] = best_item.get("byggStatus")
 
     # --- Slutt på NVE-oppslagslogikk ---
 
@@ -674,6 +698,8 @@ def main():
     NVE_DATA["vannkraftverk"] = load_jsonl(data_dir / "vannkraftverk.jsonl")
     NVE_DATA["solkraftverk"] = load_jsonl(data_dir / "solkraftverk.jsonl")
     NVE_DATA["vindkraftverk"] = load_jsonl(data_dir / "vindkraftverk.jsonl")
+    NVE_DATA["dammer"] = load_jsonl(data_dir / "dammer.jsonl")
+    NVE_DATA["magasiner"] = load_jsonl(data_dir / "magasiner.jsonl")
     
     build_kommune_coords_from_nve_data()
 

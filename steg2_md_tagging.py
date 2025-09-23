@@ -4,7 +4,12 @@ import pathlib
 import os
 import sys
 import google.generativeai as genai
+from openai import AzureOpenAI
 from dotenv import load_dotenv # <-- Ny import
+
+def get_ai_provider():
+    """Henter AI-provider fra miljøvariabler."""
+    return os.getenv("AI_PROVIDER", "gemini").lower()
 
 def get_api_key():
     """
@@ -13,11 +18,16 @@ def get_api_key():
     2. GEMINI_API_KEY fra miljøvariabler.
     3. Spør brukeren.
     """
-    # Prøv å laste .env-fil fra nåværende arbeidsmappe
+    # Prøv å laste .env-fil fra script-mappen først, deretter nåværende arbeidsmappe
     # load_dotenv() vil ikke overskrive eksisterende miljøvariabler som standard
     # Hvis .env-filen ikke finnes, skjer ingenting (ingen feil)
+    script_dir_env = pathlib.Path(__file__).parent / ".env"
     current_dir_env = pathlib.Path.cwd() / ".env"
-    if current_dir_env.is_file():
+
+    if script_dir_env.is_file():
+        load_dotenv(dotenv_path=script_dir_env, override=True) # Override for å la .env prioriteres
+        # print(f"Lastet .env fra {script_dir_env}", file=sys.stderr) # For debugging
+    elif current_dir_env.is_file():
         load_dotenv(dotenv_path=current_dir_env, override=True) # Override for å la .env prioriteres
         # print(f"Lastet .env fra {current_dir_env}", file=sys.stderr) # For debugging
 
@@ -32,8 +42,91 @@ def get_api_key():
     if not api_key:
         print("API-nøkkel ikke funnet i .env (GOOGLE_API_KEY) eller som miljøvariabel (GEMINI_API_KEY).", file=sys.stderr)
         api_key = input("Vennligst skriv inn din Google/Gemini API-nøkkel: ").strip()
-    
+
     return api_key
+
+def tag_markdown_with_azure_openai(markdown_content: str) -> str:
+    """
+    Bruker Azure OpenAI API til å tagge Markdown-innhold.
+
+    Args:
+        markdown_content: Innholdet i Markdown-filen som en streng.
+
+    Returns:
+        Den taggede Markdown-strengen.
+    """
+    # Hent konfigurasjonsvariabler
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+
+    if not all([api_key, endpoint, deployment]):
+        print("FEIL: Azure OpenAI-konfigurasjonsvariabler mangler. Sjekk AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT og AZURE_OPENAI_DEPLOYMENT i .env-filen.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        client = AzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=endpoint,
+            api_version=api_version or "2024-02-01"
+        )
+
+        prompt_template = """
+Du er en ekspert i å identifisere viktige entiteter som elv, innsjø, kraftverk, dam, vannvei i markdown dokumenter.
+Du skal returnere ALL tekst du mottar, men tagg alle entiteter med <elv navn="Storelva"> eller <kraftverk navn="Stordalen kraftverk">.
+
+VIKTIG - Korrekte navn i tags:
+- Bruk KUN egennavnet i 'navn' attributtet, IKKE entitetstypen
+- RIKTIG: <dam navn="Hunderfossen"> (ikke "dam Hunderfossen")
+- RIKTIG: <kraftverk navn="Luster kraftverk">
+- RIKTIG: <elv navn="Fortunselva"> (ikke "elva Fortunselva")
+- FEIL: <dam navn="dam Hunderfossen">, <elv navn="elva Storelva">
+
+Eksempler:
+- "Hunderfossen dam" → <dam navn="Hunderfossen"> dam
+- "dam Hunderfossen" → dam <dam navn="Hunderfossen">
+- "Luster kraftverk" → <kraftverk navn="Luster kraftverk">
+- "kraftverket Luster" → kraftverket <kraftverk navn="Luster kraftverk">
+
+Presiseringer:
+- Vannvei er en menneskebygd vei for vann (et rør eller en kanal for å lede vann).
+- Du skal bare tagge navngitte elver, innsjøer, kraftverk, dammer og vannveier som omtales i teksten.
+- Innsjø kan bli omtalt som vatn eller magasin.
+- Elv kan også bli omtalt som bekk eller vassdrag.
+- Står det to entiteter etter hverandre skilt med / er det to tags <..>/<...>.
+- Returner KUN den taggede markdown-teksten, uten noen introduksjon, forklaring eller annen tekst rundt. Ikke pakk inn svaret i ```markdown ... ```.
+
+Her er teksten i markdown format som du skal tagge på denne måten:
+--- START OF MARKDOWN CONTENT ---
+{content}
+--- END OF MARKDOWN CONTENT ---
+"""
+        prompt = prompt_template.format(content=markdown_content)
+
+        print("Sender innhold til Azure OpenAI for tagging... Dette kan ta et øyeblikk.", file=sys.stderr)
+
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1
+        )
+
+        tagged_text = response.choices[0].message.content
+
+        # Fjern eventuelle markdown-kodeblokker
+        if tagged_text.strip().startswith("```markdown") and tagged_text.strip().endswith("```"):
+            tagged_text = tagged_text.strip()[len("```markdown"):-len("```")].strip()
+        elif tagged_text.strip().startswith("```") and tagged_text.strip().endswith("```"):
+             tagged_text = tagged_text.strip()[len("```"):-len("```")].strip()
+
+        return tagged_text
+
+    except Exception as e:
+        print(f"Feil under kommunikasjon med Azure OpenAI API: {e}", file=sys.stderr)
+        sys.exit(1)
 
 def tag_markdown_with_gemini(markdown_content: str, api_key: str) -> str:
     """
@@ -53,7 +146,19 @@ def tag_markdown_with_gemini(markdown_content: str, api_key: str) -> str:
     prompt_template = """
 Du er en ekspert i å identifisere viktige entiteter som elv, innsjø, kraftverk, dam, vannvei i markdown dokumenter.
 Du skal returnere ALL tekst du mottar, men tagg alle entiteter med <elv navn="Storelva"> eller <kraftverk navn="Stordalen kraftverk">.
-Eksempel: "Dette er en konsesjon for Luster kraftverk til å drive i Fortunselva." blir til "Dette er en konsesjon for <kraftverk navn="Luster kraftverk"> til å drive i <elv navn="Fortunselva">."
+
+VIKTIG - Korrekte navn i tags:
+- Bruk KUN egennavnet i 'navn' attributtet, IKKE entitetstypen
+- RIKTIG: <dam navn="Hunderfossen"> (ikke "dam Hunderfossen")
+- RIKTIG: <kraftverk navn="Luster kraftverk">
+- RIKTIG: <elv navn="Fortunselva"> (ikke "elva Fortunselva")
+- FEIL: <dam navn="dam Hunderfossen">, <elv navn="elva Storelva">
+
+Eksempler:
+- "Hunderfossen dam" → <dam navn="Hunderfossen"> dam
+- "dam Hunderfossen" → dam <dam navn="Hunderfossen">
+- "Luster kraftverk" → <kraftverk navn="Luster kraftverk">
+- "kraftverket Luster" → kraftverket <kraftverk navn="Luster">
 
 Presiseringer:
 - Vannvei er en menneskebygd vei for vann (et rør eller en kanal for å lede vann).
@@ -149,12 +254,19 @@ def main():
                 print(f"Kunne ikke skrive tom output til '{output_path}': {e}", file=sys.stderr)
         sys.exit(0)
 
-    api_key = get_api_key()
-    if not api_key:
-        print("API-nøkkel er påkrevd for å fortsette.", file=sys.stderr)
-        sys.exit(1)
+    provider = get_ai_provider()
 
-    tagged_content = tag_markdown_with_gemini(markdown_content, api_key)
+    if provider == "azure_openai":
+        tagged_content = tag_markdown_with_azure_openai(markdown_content)
+    elif provider == "gemini":
+        api_key = get_api_key()
+        if not api_key:
+            print("API-nøkkel er påkrevd for å fortsette.", file=sys.stderr)
+            sys.exit(1)
+        tagged_content = tag_markdown_with_gemini(markdown_content, api_key)
+    else:
+        print(f"FEIL: Ukjent AI-provider '{provider}'. Bruk 'gemini' eller 'azure_openai'.", file=sys.stderr)
+        sys.exit(1)
 
     if args.stdout:
         print(tagged_content)

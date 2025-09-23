@@ -1,0 +1,20 @@
+[project]
+name = "nve-smartdok"
+version = "0.1.0"
+description = "Dette prosjektet er et eksperiment i bruk av LLM-teknologi (Gemini 2.5) for å konvertere PDF-baserte konsesjonsdokumenter til strukturerte og interaktive \"NVE Smart dokumenter\". Disse dokumentene beholder originalteksten, men utvider den med \"tags\" som inneholder NVE metadata for alle identifiserte entiteter (f.eks. elver, innsjøer, anlegg), hvor metadata hentet fra NVE sine offentlige datasett."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4==4.12.3",
+    "google-generativeai",
+    "jinja2==3.1.4",
+    "lxml==5.2.1",
+    "markdown-it-py",
+    "openai",
+    "pandas==2.2.2",
+    "pdfminer-six==20221105",
+    "pypdf",
+    "python-dotenv",
+    "requests==2.31.0",
+    "spacy==3.7.2",
+]
