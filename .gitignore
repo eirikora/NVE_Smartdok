@@ -12,5 +12,7 @@ resume_oid.txt
 *.sd
 *.nsd 
 *.html
+.venv/
+__pycache__/
 test
 test/*
