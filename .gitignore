@@ -16,3 +16,4 @@ resume_oid.txt
 __pycache__/
 test
 test/*
+!ending_map.json
