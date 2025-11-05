@@ -13,6 +13,7 @@ eller flere vassdragsnavn og rangerer sannsynlige treff fra NVEs
 5. Forsøk eksakte oppslag mot ``navn_normalisert`` (90 poeng), og varianter
    med byttet hale (60 poeng).
 6. Utfør fonetisk matching som fallback (50 poeng + justeringer).
+7. Gi nærmeste treff en bonus dersom en referansekoordinat oppgis.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import re
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from math import atan2, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Sequence
 
@@ -38,6 +40,8 @@ class MatchResult:
     match_type: str
     score: int
     entry: dict
+    coord_bonus: int = 0
+    base_score: int = 0
 
     def as_dict(self) -> dict:
         """Returner resultatet som et serialiserbart dictionary."""
@@ -52,6 +56,8 @@ class MatchResult:
             "navn_normalisert": self.entry.get("navn_normalisert"),
             "lat": self.entry.get("lat"),
             "long": self.entry.get("long"),
+            "coord_bonus": self.coord_bonus,
+            "base_score": self.base_score,
         }
 
 
@@ -88,15 +94,16 @@ def resolve_vassdrag(
     *,
     regine_index: Sequence[dict] | None = None,
     ending_map: dict[str, str] | None = None,
+    coord: tuple[float, float] | None = None,
     debug: bool = False,
     debug_log: Callable[[str], None] | None = None,
 ) -> list[dict]:
     """Finn sannsynlige vassdrag for navn som beskrives i ``text``.
 
-    Returnerer en liste med ordbøker (\xe9n per match) sortert etter poengsum.
+    Returnerer en liste med ordbøker (en per match) sortert etter poengsum.
     Hvert element inneholder ``input_name`` (original delstreng),
     ``candidate`` (søket som ga treff), ``match_type`` og metadata fra
-    indeksen.
+    indeksen. Angi ``coord=(lon, lat)`` for å tildele nærhetsbonus.
     """
 
     if not text.strip():
@@ -111,6 +118,8 @@ def resolve_vassdrag(
             print(f"[debug] {message}")
 
     log(f"Start søk for tekst: {text!r}")
+    if coord is not None:
+        log(f"Referansekoordinat: lon={coord[0]}, lat={coord[1]}")
 
     ending_map = ending_map or load_ending_map()
     regine_index = list(regine_index or load_regine_index())
@@ -127,6 +136,9 @@ def resolve_vassdrag(
             raw_name, regine_index, ending_map, suffixes, log
         )
         all_results.extend(candidate_results)
+
+    if coord is not None:
+        _apply_coordinate_bonus(all_results, coord, log if debug else None)
 
     # Sorter globalt på score (synkende) og vassdragsnummer som sekundær nøkkel
     all_results.sort(key=lambda item: (-item.score, item.entry.get("vassdragsnr")))
@@ -383,7 +395,15 @@ def _score_single_name(
                 message += f", penalty {penalty} -> {adjusted_score}"
             else:
                 message += f" (justert {adjusted_score})"
-        result = MatchResult(name, candidate, match_type, adjusted_score, entry)
+        result = MatchResult(
+            name,
+            candidate,
+            match_type,
+            adjusted_score,
+            entry,
+            coord_bonus=0,
+            base_score=adjusted_score,
+        )
         current = best_per_vassdrag.get(key)
         if current is None or adjusted_score > current.score:
             best_per_vassdrag[key] = result
@@ -437,6 +457,44 @@ def _score_single_name(
 
     return list(best_per_vassdrag.values())
 
+def _apply_coordinate_bonus(
+    results: Sequence[MatchResult],
+    coord: tuple[float, float],
+    debug_log: Callable[[str], None] | None = None,
+) -> None:
+    lon_ref, lat_ref = coord
+    candidates: list[tuple[MatchResult, float]] = []
+
+    for result in results:
+        lon = result.entry.get("long")
+        lat = result.entry.get("lat")
+        if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
+            continue
+        distance = _haversine_distance_km(lon_ref, lat_ref, lon, lat)
+        candidates.append((result, distance))
+
+    if not candidates:
+        if debug_log:
+            debug_log("Ingen gyldige koordinater for bonusberegning.")
+        return
+
+    candidates.sort(key=lambda item: item[1])
+    bonuses = [25, 20, 15, 10, 5]
+
+    for idx, (result, distance) in enumerate(candidates):
+        bonus = bonuses[idx] if idx < len(bonuses) else 0
+        if bonus <= 0:
+            break
+        result.score += bonus
+        result.coord_bonus += bonus
+        if debug_log:
+            debug_log(
+                f"Koordinatbonus +{bonus}p til {result.entry.get('navn')} "
+                f"(vnr {result.entry.get('vassdragsnr')}) "
+                f"med avstand {distance:.2f} km "
+                f"(score {result.base_score} -> {result.score})"
+            )
+
 def _lookup_exact(entries: Sequence[dict], field: str, value: str) -> Iterator[dict]:
     value_lower = value.casefold()
     for entry in entries:
@@ -463,6 +521,21 @@ def _swap_normalized_tail(name: str, category: str | None) -> list[str]:
 
     prefix = match.group(1)
     return [f"{prefix}{replacement}" for replacement in swaps[category]]
+
+
+def _haversine_distance_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Beregn avstand mellom to punkter med Haversine-formelen."""
+
+    radius = 6371.0  # jordradius i km
+    lon1_rad, lat1_rad = radians(lon1), radians(lat1)
+    lon2_rad, lat2_rad = radians(lon2), radians(lat2)
+
+    dlon = lon2_rad - lon1_rad
+    dlat = lat2_rad - lat1_rad
+
+    a = sin(dlat / 2) ** 2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return radius * c
 
 
 def _phonetic_matches(
@@ -615,12 +688,47 @@ def _clean_letters(text: str) -> str:
 
 def _cli(argv: Sequence[str]) -> int:
     debug = False
+    lon: float | None = None
+    lat: float | None = None
     args: list[str] = []
-    for item in argv[1:]:
+
+    i = 1
+    while i < len(argv):
+        item = argv[i]
         if item == "--debug":
             debug = True
-        else:
-            args.append(item)
+            i += 1
+            continue
+        if item == "--lon":
+            if i + 1 >= len(argv):
+                print("Flagget --lon krever en verdi.", file=sys.stderr)
+                return 1
+            try:
+                lon = float(argv[i + 1])
+            except ValueError:
+                print("Lon må være et tall.", file=sys.stderr)
+                return 1
+            i += 2
+            continue
+        if item == "--lat":
+            if i + 1 >= len(argv):
+                print("Flagget --lat krever en verdi.", file=sys.stderr)
+                return 1
+            try:
+                lat = float(argv[i + 1])
+            except ValueError:
+                print("Lat må være et tall.", file=sys.stderr)
+                return 1
+            i += 2
+            continue
+        args.append(item)
+        i += 1
+
+    if (lon is None) != (lat is None):
+        print("Oppgi både --lon og --lat for koordinatbonus.", file=sys.stderr)
+        return 1
+
+    coord_arg = (lon, lat) if lon is not None and lat is not None else None
 
     if args:
         query = " ".join(args).strip()
@@ -636,6 +744,7 @@ def _cli(argv: Sequence[str]) -> int:
     debug_lines: list[str] = []
     matches = resolve_vassdrag(
         query,
+        coord=coord_arg,
         debug=debug,
         debug_log=debug_lines.append if debug else None,
     )
@@ -666,6 +775,14 @@ def _cli(argv: Sequence[str]) -> int:
         input_name = match.get("input_name") or ""
         match_type = match.get("match_type") or "ukjent"
         print(f"   Variant: '{input_name}' -> '{candidate}' ({match_type})")
+
+        base_score = match.get("base_score")
+        if isinstance(base_score, (int, float)) and base_score != score:
+            print(f"   Basisscore: {base_score}")
+
+        coord_bonus = match.get("coord_bonus") or 0
+        if coord_bonus:
+            print(f"   Koordinatbonus: +{coord_bonus}")
 
         lat = match.get("lat")
         lon = match.get("long")
