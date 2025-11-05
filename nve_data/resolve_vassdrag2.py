@@ -372,6 +372,8 @@ def _score_single_name(
             adjusted_score -= penalty
         else:
             penalty = 0
+        # Ensure 'message' is always defined so static analysis knows it's a str
+        message = ""
         if debug_log:
             message = (
                 f"  -> {match_type} treff for kandidat {candidate!r} ga {score} poeng"
@@ -389,10 +391,15 @@ def _score_single_name(
                 debug_log(message + " [ny beste]")
         else:
             if debug_log:
-                debug_log(
-                    message
-                    + f" [forkastet, eksisterende score {current.score}]"
+                message = (
+                    f"  -> {match_type} treff for kandidat {candidate!r} ga {score} poeng"
+                    f" mot {entry.get('navn')} (vnr {vnr})"
                 )
+                if penalty:
+                    message += f", penalty {penalty} -> {adjusted_score}"
+                else:
+                    message += f" (justert {adjusted_score})"
+                debug_log(message + f" [forkastet, eksisterende score {current.score}]")
 
     # Steg 4 – eksakt match på «navn»
     for candidate in candidates:
