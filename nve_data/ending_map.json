@@ -2,6 +2,7 @@
     "elv": "ELV",
     "elva": "ELV",
     "elven": "ELV",
+    "elvene": "ELV",
     "elvi": "ELV",
     "bekk": "ELV",
     "bekken": "ELV",
@@ -30,6 +31,9 @@
     "fallene": "ELV",
     "faldene": "ELV",
     "fallet": "ELV",
+    "reguleringen": "ELV",
+    "vassdraget": "ELV",
+    "vassdragene": "ELV",
 
     "johka": "ELV_SAMISK",
     "jåkka": "ELV_SAMISK",
@@ -107,12 +111,11 @@
     "dalen": "DAL",
     "dalene": "DAL",
 
-    "fjord": "FJORD",
     "fjorden": "FJORD",
+    "fjordens": "FJORD",
     "sund": "FJORD",
     "sundet": "FJORD",
 
-    "fjell": "FJELL",
     "fjellet": "FJELL",
     "hei": "FJELL",
     "heia": "FJELL",
